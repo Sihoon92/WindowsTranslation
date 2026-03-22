@@ -324,24 +324,16 @@ class MainWindow(QMainWindow):
 
         self._save_current_settings()
 
-        # Generate output path
+        # Generate output path in the same directory as the original file
         base, ext = os.path.splitext(file_path)
         output_path = f"{base}_translated{ext}"
-
-        # Ask user for save location
-        save_path, _ = QFileDialog.getSaveFileName(
-            self, "번역 파일 저장", output_path,
-            f"파일 (*{ext});;모든 파일 (*.*)"
-        )
-        if not save_path:
-            return
 
         self.log_output.clear()
         self.progress_bar.setValue(0)
         self.translate_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
 
-        self.worker = TranslationWorker(client, file_path, source, target, save_path)
+        self.worker = TranslationWorker(client, file_path, source, target, output_path)
         self.worker.progress.connect(self._on_progress)
         self.worker.log.connect(self._on_log)
         self.worker.finished_signal.connect(self._on_finished)
