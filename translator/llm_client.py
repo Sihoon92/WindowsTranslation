@@ -18,7 +18,11 @@ class LLMClient:
         }
 
     def _chat_completion(self, messages: list[dict], temperature: float = 0.3) -> str:
-        url = f"{self.api_url}/v1/chat/completions"
+        base = self.api_url
+        if base.endswith("/v1"):
+            url = f"{base}/chat/completions"
+        else:
+            url = f"{base}/v1/chat/completions"
         payload = {
             "model": self.model_name,
             "messages": messages,
