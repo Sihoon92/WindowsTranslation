@@ -1,66 +1,33 @@
 import json
-import time
-import requests
+
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage
 
 
 class LLMClient:
     def __init__(self, api_url: str, api_key: str, model_name: str):
-        self.api_url = api_url.rstrip("/")
-        self.api_key = api_key
-        self.model_name = model_name
-        self.timeout = 60
-        self.max_retries = 3
+        base_url = api_url.rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url = f"{base_url}/v1"
 
-    def _headers(self) -> dict:
-        return {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
+        self.llm = ChatOpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            model=model_name,
+            temperature=0.3,
+            request_timeout=60,
+            max_retries=3,
+        )
 
-    def _chat_completion(self, messages: list[dict], temperature: float = 0.3) -> str:
-        base = self.api_url
-        if base.endswith("/v1"):
-            url = f"{base}/chat/completions"
-        else:
-            url = f"{base}/v1/chat/completions"
-        payload = {
-            "model": self.model_name,
-            "messages": messages,
-            "temperature": temperature,
-        }
-
-        last_error = None
-        for attempt in range(self.max_retries):
-            try:
-                resp = requests.post(
-                    url,
-                    headers=self._headers(),
-                    json=payload,
-                    timeout=self.timeout,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return data["choices"][0]["message"]["content"].strip()
-            except requests.exceptions.HTTPError as e:
-                if resp.status_code == 429:
-                    wait = 2 ** (attempt + 1)
-                    time.sleep(wait)
-                    last_error = e
-                    continue
-                raise
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-                last_error = e
-                if attempt < self.max_retries - 1:
-                    time.sleep(2 ** (attempt + 1))
-                    continue
-                raise
-
-        raise last_error
+    def _invoke(self, messages: list, temperature: float = 0.3) -> str:
+        self.llm.temperature = temperature
+        response = self.llm.invoke(messages)
+        return response.content.strip()
 
     def test_connection(self) -> tuple[bool, str]:
         try:
-            result = self._chat_completion(
-                [{"role": "user", "content": "Hi, respond with 'OK'."}],
+            result = self._invoke(
+                [HumanMessage(content="Hi, respond with 'OK'.")],
                 temperature=0,
             )
             return True, f"연결 성공: {result}"
@@ -72,19 +39,16 @@ class LLMClient:
             return text
 
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    f"You are a professional translator. "
-                    f"Translate the following text from {source_lang} to {target_lang}. "
-                    f"Return ONLY the translated text without any explanation, "
-                    f"prefix, or additional formatting. "
-                    f"Preserve numbers, special characters, and line breaks as-is."
-                ),
-            },
-            {"role": "user", "content": text},
+            SystemMessage(content=(
+                f"You are a professional translator. "
+                f"Translate the following text from {source_lang} to {target_lang}. "
+                f"Return ONLY the translated text without any explanation, "
+                f"prefix, or additional formatting. "
+                f"Preserve numbers, special characters, and line breaks as-is."
+            )),
+            HumanMessage(content=text),
         ]
-        return self._chat_completion(messages)
+        return self._invoke(messages)
 
     def translate_batch(
         self, texts: list[str], source_lang: str, target_lang: str
@@ -108,20 +72,17 @@ class LLMClient:
         json_input = json.dumps(items, ensure_ascii=False)
 
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    f"You are a professional translator. "
-                    f"Translate each text in the JSON array from {source_lang} to {target_lang}. "
-                    f"Return ONLY a JSON array with the translated texts in the same order. "
-                    f"Preserve numbers, special characters, and line breaks. "
-                    f"Do not add any explanation or formatting outside the JSON array."
-                ),
-            },
-            {"role": "user", "content": json_input},
+            SystemMessage(content=(
+                f"You are a professional translator. "
+                f"Translate each text in the JSON array from {source_lang} to {target_lang}. "
+                f"Return ONLY a JSON array with the translated texts in the same order. "
+                f"Preserve numbers, special characters, and line breaks. "
+                f"Do not add any explanation or formatting outside the JSON array."
+            )),
+            HumanMessage(content=json_input),
         ]
 
-        response = self._chat_completion(messages)
+        response = self._invoke(messages)
 
         try:
             translated = json.loads(response)
