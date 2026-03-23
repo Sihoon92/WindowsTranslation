@@ -86,8 +86,9 @@ class TranslationWorker(QThread):
                 page_groups[page_key].append(idx)
 
             self.log.emit(
-                f"{len(page_groups)}개 페이지로 그룹화 → API 호출 {len(page_groups)}회"
+                f"{len(page_groups)}개 페이지로 그룹화 → 예상 API 호출 {len(page_groups)}회"
             )
+            self.client.reset_api_call_count()
 
             translated = 0
             for page_key, indices in page_groups.items():
@@ -113,6 +114,9 @@ class TranslationWorker(QThread):
                 translated += len(indices)
                 self.progress.emit(translated, total)
 
+            self.log.emit(
+                f"번역 완료 (실제 API 호출: {self.client.api_call_count}회)"
+            )
             self.log.emit("번역 결과 적용 중...")
             handler.apply_translations(self.file_path, texts, self.output_path)
 
