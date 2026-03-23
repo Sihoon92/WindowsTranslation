@@ -1,4 +1,5 @@
 import os
+from collections import OrderedDict
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -73,33 +74,43 @@ class TranslationWorker(QThread):
                 self.finished_signal.emit(False, "번역할 텍스트가 없습니다.")
                 return
 
-            self.log.emit(f"총 {len(texts)}개 텍스트 블록 추출 완료")
-
-            # Translate in batches
-            batch_size = 10
             total = len(texts)
-            translated = 0
+            self.log.emit(f"총 {total}개 텍스트 블록 추출 완료")
 
-            for i in range(0, total, batch_size):
+            # Group texts by page for efficient API calls
+            page_groups = OrderedDict()
+            for idx, item in enumerate(texts):
+                page_key = item.get("page", 0)
+                if page_key not in page_groups:
+                    page_groups[page_key] = []
+                page_groups[page_key].append(idx)
+
+            self.log.emit(
+                f"{len(page_groups)}개 페이지로 그룹화 → API 호출 {len(page_groups)}회"
+            )
+
+            translated = 0
+            for page_key, indices in page_groups.items():
                 if self._is_cancelled:
                     self.finished_signal.emit(False, "번역이 취소되었습니다.")
                     return
 
-                batch = texts[i : i + batch_size]
-                batch_texts = [item["text"] for item in batch]
+                batch_texts = [texts[i]["text"] for i in indices]
 
                 self.log.emit(
-                    f"번역 중... ({min(i + batch_size, total)}/{total})"
+                    f"번역 중... 페이지 {page_key} "
+                    f"({translated + len(indices)}/{total}, "
+                    f"블록 {len(indices)}개)"
                 )
 
                 translated_texts = self.client.translate_batch(
                     batch_texts, self.source_lang, self.target_lang
                 )
 
-                for j, trans_text in enumerate(translated_texts):
-                    texts[i + j]["text"] = trans_text
+                for i, trans_text in zip(indices, translated_texts):
+                    texts[i]["text"] = trans_text
 
-                translated += len(batch)
+                translated += len(indices)
                 self.progress.emit(translated, total)
 
             self.log.emit("번역 결과 적용 중...")

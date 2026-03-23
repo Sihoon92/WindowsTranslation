@@ -35,6 +35,7 @@ class WordFileHandler(BaseFileHandler):
                 if text.strip():
                     results.append({
                         "text": text,
+                        "page": 0,
                         "location": {"type": "paragraph", "p_idx": p_idx},
                     })
 
@@ -50,6 +51,7 @@ class WordFileHandler(BaseFileHandler):
                             if text.strip():
                                 results.append({
                                     "text": text,
+                                    "page": t_idx,
                                     "location": {
                                         "type": "table",
                                         "t_idx": t_idx,

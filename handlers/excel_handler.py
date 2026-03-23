@@ -29,6 +29,7 @@ class ExcelFileHandler(BaseFileHandler):
                         if isinstance(value, str) and value.strip():
                             results.append({
                                 "text": value,
+                                "page": sheet.name,
                                 "location": {
                                     "sheet": sheet.name,
                                     "row": row,

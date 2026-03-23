@@ -18,6 +18,7 @@ class PdfFileHandler(BaseFileHandler):
                 if text and text.strip():
                     results.append({
                         "text": text,
+                        "page": page_idx,
                         "location": {"page": page_idx},
                     })
         return results

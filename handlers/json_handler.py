@@ -20,7 +20,7 @@ class JsonFileHandler(BaseFileHandler):
     def _extract_recursive(self, obj, path: list, results: list):
         if isinstance(obj, str):
             if obj.strip():
-                results.append({"text": obj, "location": {"path": list(path)}})
+                results.append({"text": obj, "page": 0, "location": {"path": list(path)}})
         elif isinstance(obj, dict):
             for key, value in obj.items():
                 self._extract_recursive(value, path + [key], results)

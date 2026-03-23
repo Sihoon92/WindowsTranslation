@@ -73,7 +73,7 @@ class PptxFileHandler(BaseFileHandler):
                         "p_idx": p_idx,
                         **extra,
                     }
-                    results.append({"text": text, "location": loc})
+                    results.append({"text": text, "page": s_idx, "location": loc})
             except Exception:
                 continue
 

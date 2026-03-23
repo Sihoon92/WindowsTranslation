@@ -20,7 +20,7 @@ class TextFileHandler(BaseFileHandler):
         results = []
         for i, para in enumerate(paragraphs):
             if para.strip():
-                results.append({"text": para, "location": {"index": i}})
+                results.append({"text": para, "page": 0, "location": {"index": i}})
         return results
 
     def apply_translations(
@@ -55,6 +55,7 @@ class CsvFileHandler(BaseFileHandler):
                     if cell.strip():
                         results.append({
                             "text": cell,
+                            "page": 0,
                             "location": {"row": row_idx, "col": col_idx},
                         })
         return results
