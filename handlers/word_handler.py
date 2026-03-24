@@ -37,6 +37,7 @@ class WordFileHandler(BaseFileHandler):
             self._extract_footnotes(doc, results)
             self._extract_endnotes(doc, results)
             self._extract_comments(doc, results)
+            self._extract_content_controls(doc, results)
 
             doc.Close(False)
             return results
@@ -136,6 +137,10 @@ class WordFileHandler(BaseFileHandler):
                         self._extract_header_footer_text(
                             results, header.Range, sec_idx, "header", hf_type
                         )
+                        # Extract shapes (text boxes) inside this header
+                        self._extract_hf_shapes(
+                            results, header, sec_idx, "header", hf_type
+                        )
                 except Exception:
                     continue
             # Footers
@@ -146,8 +151,55 @@ class WordFileHandler(BaseFileHandler):
                         self._extract_header_footer_text(
                             results, footer.Range, sec_idx, "footer", hf_type
                         )
+                        # Extract shapes (text boxes) inside this footer
+                        self._extract_hf_shapes(
+                            results, footer, sec_idx, "footer", hf_type
+                        )
                 except Exception:
                     continue
+
+    def _extract_hf_shapes(self, results, hf, sec_idx, kind, hf_type):
+        """Extract text from shapes (text boxes) inside a header or footer."""
+        try:
+            shapes = hf.Shapes
+            for sh_idx in range(1, shapes.Count + 1):
+                shape = shapes(sh_idx)
+                self._process_hf_shape(
+                    results, shape, sec_idx, kind, hf_type, [sh_idx]
+                )
+        except Exception:
+            pass
+
+    def _process_hf_shape(self, results, shape, sec_idx, kind, hf_type, shape_path):
+        try:
+            if shape.Type == MSO_GROUP:
+                for gi_idx in range(1, shape.GroupItems.Count + 1):
+                    child = shape.GroupItems(gi_idx)
+                    self._process_hf_shape(
+                        results, child, sec_idx, kind, hf_type,
+                        shape_path + [gi_idx],
+                    )
+                return
+
+            if shape.HasTextFrame:
+                tf = shape.TextFrame
+                try:
+                    text = tf.TextRange.Text.strip()
+                except Exception:
+                    text = ""
+                if text:
+                    results.append({
+                        "text": text,
+                        "page": 0,
+                        "location": {
+                            "type": f"{kind}_shape",
+                            "sec_idx": sec_idx,
+                            "hf_type": hf_type,
+                            "shape_path": shape_path,
+                        },
+                    })
+        except Exception:
+            pass
 
     def _extract_header_footer_text(self, results, rng, sec_idx, kind, hf_type):
         text = rng.Text.rstrip("\r\n\x0b\x07")
@@ -209,6 +261,22 @@ class WordFileHandler(BaseFileHandler):
             except Exception:
                 continue
 
+    # --- Content Controls (rich text boxes, plain text boxes) ---
+    def _extract_content_controls(self, doc, results):
+        for cc_idx in range(1, doc.ContentControls.Count + 1):
+            try:
+                cc = doc.ContentControls(cc_idx)
+                text = cc.Range.Text.rstrip("\r\n\x0b\x07")
+                if text.strip():
+                    page_num = cc.Range.Information(3)
+                    results.append({
+                        "text": text,
+                        "page": page_num,
+                        "location": {"type": "content_control", "cc_idx": cc_idx},
+                    })
+            except Exception:
+                continue
+
     # ------------------------------------------------------------------
     # apply_translations
     # ------------------------------------------------------------------
@@ -265,6 +333,21 @@ class WordFileHandler(BaseFileHandler):
                     elif loc["type"] == "comment":
                         comment = doc.Comments(loc["cm_idx"])
                         comment.Range.Text = t["text"]
+
+                    elif loc["type"] in ("header_shape", "footer_shape"):
+                        section = doc.Sections(loc["sec_idx"])
+                        if loc["type"] == "header_shape":
+                            hf = section.Headers(loc["hf_type"])
+                        else:
+                            hf = section.Footers(loc["hf_type"])
+                        shape = hf.Shapes(loc["shape_path"][0])
+                        for gi_idx in loc["shape_path"][1:]:
+                            shape = shape.GroupItems(gi_idx)
+                        shape.TextFrame.TextRange.Text = t["text"]
+
+                    elif loc["type"] == "content_control":
+                        cc = doc.ContentControls(loc["cc_idx"])
+                        cc.Range.Text = t["text"]
 
                 except Exception:
                     continue
