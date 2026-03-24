@@ -6,6 +6,9 @@ import win32com.client
 
 from handlers.base import BaseFileHandler, register_handler
 
+# Word Shape type constants
+MSO_GROUP = 6  # msoGroup
+
 
 @register_handler
 class WordFileHandler(BaseFileHandler):
@@ -13,6 +16,9 @@ class WordFileHandler(BaseFileHandler):
     def supported_extensions(cls) -> list[str]:
         return [".docx", ".doc"]
 
+    # ------------------------------------------------------------------
+    # extract_texts
+    # ------------------------------------------------------------------
     def extract_texts(self, file_path: str) -> list[dict]:
         abs_path = os.path.abspath(file_path)
         pythoncom.CoInitialize()
@@ -24,47 +30,13 @@ class WordFileHandler(BaseFileHandler):
             doc = word.Documents.Open(abs_path, ReadOnly=True)
             results = []
 
-            # Body paragraphs (exclude those inside tables)
-            for p_idx in range(1, doc.Paragraphs.Count + 1):
-                para = doc.Paragraphs(p_idx)
-                # wdWithInTable = 12
-                if para.Range.Information(12):
-                    continue
-                text = para.Range.Text
-                text = text.rstrip("\r\n\x0b\x07")
-                if text.strip():
-                    # wdActiveEndPageNumber = 3
-                    page_num = para.Range.Information(3)
-                    results.append({
-                        "text": text,
-                        "page": page_num,
-                        "location": {"type": "paragraph", "p_idx": p_idx},
-                    })
-
-            # Tables
-            for t_idx in range(1, doc.Tables.Count + 1):
-                table = doc.Tables(t_idx)
-                for r_idx in range(1, table.Rows.Count + 1):
-                    for c_idx in range(1, table.Columns.Count + 1):
-                        try:
-                            cell = table.Cell(r_idx, c_idx)
-                            text = cell.Range.Text
-                            text = text.rstrip("\r\n\x07")
-                            if text.strip():
-                                # wdActiveEndPageNumber = 3
-                                page_num = cell.Range.Information(3)
-                                results.append({
-                                    "text": text,
-                                    "page": page_num,
-                                    "location": {
-                                        "type": "table",
-                                        "t_idx": t_idx,
-                                        "r_idx": r_idx,
-                                        "c_idx": c_idx,
-                                    },
-                                })
-                        except Exception:
-                            continue
+            self._extract_body_paragraphs(doc, results)
+            self._extract_tables(doc, results)
+            self._extract_shapes(doc, results)
+            self._extract_headers_footers(doc, results)
+            self._extract_footnotes(doc, results)
+            self._extract_endnotes(doc, results)
+            self._extract_comments(doc, results)
 
             doc.Close(False)
             return results
@@ -76,6 +48,170 @@ class WordFileHandler(BaseFileHandler):
                     pass
             pythoncom.CoUninitialize()
 
+    # --- Body paragraphs (exclude those inside tables) ---
+    def _extract_body_paragraphs(self, doc, results):
+        for p_idx in range(1, doc.Paragraphs.Count + 1):
+            para = doc.Paragraphs(p_idx)
+            # wdWithInTable = 12
+            if para.Range.Information(12):
+                continue
+            text = para.Range.Text
+            text = text.rstrip("\r\n\x0b\x07")
+            if text.strip():
+                page_num = para.Range.Information(3)  # wdActiveEndPageNumber
+                results.append({
+                    "text": text,
+                    "page": page_num,
+                    "location": {"type": "paragraph", "p_idx": p_idx},
+                })
+
+    # --- Tables ---
+    def _extract_tables(self, doc, results):
+        for t_idx in range(1, doc.Tables.Count + 1):
+            table = doc.Tables(t_idx)
+            for r_idx in range(1, table.Rows.Count + 1):
+                for c_idx in range(1, table.Columns.Count + 1):
+                    try:
+                        cell = table.Cell(r_idx, c_idx)
+                        text = cell.Range.Text
+                        text = text.rstrip("\r\n\x07")
+                        if text.strip():
+                            page_num = cell.Range.Information(3)
+                            results.append({
+                                "text": text,
+                                "page": page_num,
+                                "location": {
+                                    "type": "table",
+                                    "t_idx": t_idx,
+                                    "r_idx": r_idx,
+                                    "c_idx": c_idx,
+                                },
+                            })
+                    except Exception:
+                        continue
+
+    # --- Shapes (text boxes, diagrams, grouped shapes) ---
+    def _extract_shapes(self, doc, results):
+        for sh_idx in range(1, doc.Shapes.Count + 1):
+            shape = doc.Shapes(sh_idx)
+            self._process_shape(results, shape, [sh_idx])
+
+    def _process_shape(self, results, shape, shape_path):
+        try:
+            if shape.Type == MSO_GROUP:
+                for gi_idx in range(1, shape.GroupItems.Count + 1):
+                    child = shape.GroupItems(gi_idx)
+                    self._process_shape(results, child, shape_path + [gi_idx])
+                return
+
+            if shape.HasTextFrame:
+                tf = shape.TextFrame
+                try:
+                    text_range = tf.TextRange
+                    text = text_range.Text.strip()
+                except Exception:
+                    text = ""
+                if text:
+                    try:
+                        page_num = shape.Anchor.Information(3)
+                    except Exception:
+                        page_num = 0
+                    results.append({
+                        "text": text,
+                        "page": page_num,
+                        "location": {"type": "shape", "shape_path": shape_path},
+                    })
+        except Exception:
+            pass
+
+    # --- Headers & Footers ---
+    def _extract_headers_footers(self, doc, results):
+        for sec_idx in range(1, doc.Sections.Count + 1):
+            section = doc.Sections(sec_idx)
+            # Headers: wdHeaderFooterPrimary=1, wdHeaderFooterFirstPage=2, wdHeaderFooterEvenPages=3
+            for hf_type in (1, 2, 3):
+                try:
+                    header = section.Headers(hf_type)
+                    if header.Exists:
+                        self._extract_header_footer_text(
+                            results, header.Range, sec_idx, "header", hf_type
+                        )
+                except Exception:
+                    continue
+            # Footers
+            for hf_type in (1, 2, 3):
+                try:
+                    footer = section.Footers(hf_type)
+                    if footer.Exists:
+                        self._extract_header_footer_text(
+                            results, footer.Range, sec_idx, "footer", hf_type
+                        )
+                except Exception:
+                    continue
+
+    def _extract_header_footer_text(self, results, rng, sec_idx, kind, hf_type):
+        text = rng.Text.rstrip("\r\n\x0b\x07")
+        if text.strip():
+            results.append({
+                "text": text,
+                "page": 0,
+                "location": {
+                    "type": kind,
+                    "sec_idx": sec_idx,
+                    "hf_type": hf_type,
+                },
+            })
+
+    # --- Footnotes ---
+    def _extract_footnotes(self, doc, results):
+        for fn_idx in range(1, doc.Footnotes.Count + 1):
+            try:
+                fn = doc.Footnotes(fn_idx)
+                text = fn.Range.Text.rstrip("\r\n\x0b\x07")
+                if text.strip():
+                    page_num = fn.Range.Information(3)
+                    results.append({
+                        "text": text,
+                        "page": page_num,
+                        "location": {"type": "footnote", "fn_idx": fn_idx},
+                    })
+            except Exception:
+                continue
+
+    # --- Endnotes ---
+    def _extract_endnotes(self, doc, results):
+        for en_idx in range(1, doc.Endnotes.Count + 1):
+            try:
+                en = doc.Endnotes(en_idx)
+                text = en.Range.Text.rstrip("\r\n\x0b\x07")
+                if text.strip():
+                    page_num = en.Range.Information(3)
+                    results.append({
+                        "text": text,
+                        "page": page_num,
+                        "location": {"type": "endnote", "en_idx": en_idx},
+                    })
+            except Exception:
+                continue
+
+    # --- Comments ---
+    def _extract_comments(self, doc, results):
+        for cm_idx in range(1, doc.Comments.Count + 1):
+            try:
+                comment = doc.Comments(cm_idx)
+                text = comment.Range.Text.rstrip("\r\n\x0b\x07")
+                if text.strip():
+                    results.append({
+                        "text": text,
+                        "page": 0,
+                        "location": {"type": "comment", "cm_idx": cm_idx},
+                    })
+            except Exception:
+                continue
+
+    # ------------------------------------------------------------------
+    # apply_translations
+    # ------------------------------------------------------------------
     def apply_translations(
         self, file_path: str, translations: list[dict], output_path: str
     ):
@@ -91,19 +227,47 @@ class WordFileHandler(BaseFileHandler):
 
             for t in translations:
                 loc = t["location"]
-                if loc["type"] == "paragraph":
-                    para = doc.Paragraphs(loc["p_idx"])
-                    rng = para.Range
-                    # Exclude trailing paragraph mark
-                    rng.End = rng.End - 1
-                    rng.Text = t["text"]
-                elif loc["type"] == "table":
-                    table = doc.Tables(loc["t_idx"])
-                    cell = table.Cell(loc["r_idx"], loc["c_idx"])
-                    rng = cell.Range
-                    # Cell range ends with \r\x07, exclude those
-                    rng.End = rng.End - 2
-                    rng.Text = t["text"]
+                try:
+                    if loc["type"] == "paragraph":
+                        para = doc.Paragraphs(loc["p_idx"])
+                        rng = para.Range
+                        rng.End = rng.End - 1  # exclude trailing paragraph mark
+                        rng.Text = t["text"]
+
+                    elif loc["type"] == "table":
+                        table = doc.Tables(loc["t_idx"])
+                        cell = table.Cell(loc["r_idx"], loc["c_idx"])
+                        rng = cell.Range
+                        rng.End = rng.End - 2  # cell range ends with \r\x07
+                        rng.Text = t["text"]
+
+                    elif loc["type"] == "shape":
+                        shape = self._get_shape_by_path(doc, loc["shape_path"])
+                        shape.TextFrame.TextRange.Text = t["text"]
+
+                    elif loc["type"] in ("header", "footer"):
+                        section = doc.Sections(loc["sec_idx"])
+                        if loc["type"] == "header":
+                            hf = section.Headers(loc["hf_type"])
+                        else:
+                            hf = section.Footers(loc["hf_type"])
+                        rng = hf.Range
+                        rng.Text = t["text"]
+
+                    elif loc["type"] == "footnote":
+                        fn = doc.Footnotes(loc["fn_idx"])
+                        fn.Range.Text = t["text"]
+
+                    elif loc["type"] == "endnote":
+                        en = doc.Endnotes(loc["en_idx"])
+                        en.Range.Text = t["text"]
+
+                    elif loc["type"] == "comment":
+                        comment = doc.Comments(loc["cm_idx"])
+                        comment.Range.Text = t["text"]
+
+                except Exception:
+                    continue
 
             doc.Save()
             doc.Close()
@@ -114,3 +278,9 @@ class WordFileHandler(BaseFileHandler):
                 except Exception:
                     pass
             pythoncom.CoUninitialize()
+
+    def _get_shape_by_path(self, doc, shape_path):
+        shape = doc.Shapes(shape_path[0])
+        for gi_idx in shape_path[1:]:
+            shape = shape.GroupItems(gi_idx)
+        return shape
