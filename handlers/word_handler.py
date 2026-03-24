@@ -33,9 +33,11 @@ class WordFileHandler(BaseFileHandler):
                 text = para.Range.Text
                 text = text.rstrip("\r\n\x0b\x07")
                 if text.strip():
+                    # wdActiveEndPageNumber = 3
+                    page_num = para.Range.Information(3)
                     results.append({
                         "text": text,
-                        "page": 0,
+                        "page": page_num,
                         "location": {"type": "paragraph", "p_idx": p_idx},
                     })
 
@@ -49,9 +51,11 @@ class WordFileHandler(BaseFileHandler):
                             text = cell.Range.Text
                             text = text.rstrip("\r\n\x07")
                             if text.strip():
+                                # wdActiveEndPageNumber = 3
+                                page_num = cell.Range.Information(3)
                                 results.append({
                                     "text": text,
-                                    "page": t_idx,
+                                    "page": page_num,
                                     "location": {
                                         "type": "table",
                                         "t_idx": t_idx,
