@@ -42,6 +42,7 @@ LANGUAGES = [
     "Tiếng Việt",
     "ภาษาไทย",
     "Bahasa Indonesia",
+    "Magyar",
 ]
 
 
