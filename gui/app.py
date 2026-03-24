@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -45,94 +46,153 @@ LANGUAGES = [
 
 
 class TranslationWorker(QThread):
-    progress = pyqtSignal(int, int)  # current, total
+    progress = pyqtSignal(int, int)  # current, total  (overall across all files)
     log = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)  # success, message
 
-    def __init__(self, client, file_path, source_lang, target_lang, output_path, api_delay=0.0):
+    def __init__(self, client, file_paths, source_lang, target_lang, api_delay=0.0):
         super().__init__()
         self.client = client
-        self.file_path = file_path
+        self.file_paths = file_paths
         self.source_lang = source_lang
         self.target_lang = target_lang
-        self.output_path = output_path
         self.api_delay = api_delay
         self._is_cancelled = False
 
     def cancel(self):
         self._is_cancelled = True
 
+    def _translate_single_file(self, file_path, output_path, file_idx, file_count, completed_files_blocks, total_blocks):
+        """Translate a single file. Returns number of text blocks processed."""
+        file_name = os.path.basename(file_path)
+        self.log.emit(f"\n{'='*40}")
+        self.log.emit(f"[{file_idx + 1}/{file_count}] {file_name}")
+        self.log.emit(f"{'='*40}")
+
+        handler = get_handler(file_path)
+        if handler is None:
+            ext = os.path.splitext(file_path)[1]
+            self.log.emit(f"[건너뜀] 지원하지 않는 파일 형식: {ext}")
+            return 0, False
+
+        self.log.emit("텍스트 추출 중...")
+        texts = handler.extract_texts(file_path)
+
+        if not texts:
+            self.log.emit("[건너뜀] 번역할 텍스트가 없습니다.")
+            return 0, True
+
+        file_total = len(texts)
+        self.log.emit(f"총 {file_total}개 텍스트 블록 추출 완료")
+
+        # Group texts by page
+        page_groups = OrderedDict()
+        for idx, item in enumerate(texts):
+            page_key = item.get("page", 0)
+            if page_key not in page_groups:
+                page_groups[page_key] = []
+            page_groups[page_key].append(idx)
+
+        self.log.emit(
+            f"{len(page_groups)}개 페이지로 그룹화 → 예상 API 호출 {len(page_groups)}회"
+        )
+        self.client.reset_api_call_count()
+
+        translated = 0
+        is_first_page = True
+        for page_key, indices in page_groups.items():
+            if self._is_cancelled:
+                return translated, False
+
+            if not is_first_page and self.api_delay > 0:
+                self.log.emit(f"API 딜레이 {self.api_delay}초 대기 중...")
+                time.sleep(self.api_delay)
+            is_first_page = False
+
+            batch_texts = [texts[i]["text"] for i in indices]
+
+            self.log.emit(
+                f"번역 중... 페이지 {page_key} "
+                f"({translated + len(indices)}/{file_total}, "
+                f"블록 {len(indices)}개)"
+            )
+
+            translated_texts = self.client.translate_batch(
+                batch_texts, self.source_lang, self.target_lang
+            )
+
+            for i, trans_text in zip(indices, translated_texts):
+                texts[i]["text"] = trans_text
+
+            translated += len(indices)
+            self.progress.emit(completed_files_blocks + translated, total_blocks)
+
+        self.log.emit(
+            f"번역 완료 (실제 API 호출: {self.client.api_call_count}회)"
+        )
+        self.log.emit("번역 결과 적용 중...")
+        handler.apply_translations(file_path, texts, output_path)
+        self.log.emit(f"저장: {output_path}")
+
+        return translated, True
+
     def run(self):
-        try:
-            handler = get_handler(self.file_path)
-            if handler is None:
-                ext = os.path.splitext(self.file_path)[1]
-                self.finished_signal.emit(False, f"지원하지 않는 파일 형식: {ext}")
-                return
+        file_count = len(self.file_paths)
 
-            self.log.emit("텍스트 추출 중...")
-            texts = handler.extract_texts(self.file_path)
+        # 1단계: 전체 텍스트 블록 수를 미리 파악하여 정확한 진행률 계산
+        self.log.emit(f"총 {file_count}개 파일 처리 시작")
 
-            if not texts:
-                self.finished_signal.emit(False, "번역할 텍스트가 없습니다.")
-                return
+        succeeded = []
+        failed = []
+        completed_blocks = 0
 
-            total = len(texts)
-            self.log.emit(f"총 {total}개 텍스트 블록 추출 완료")
+        # 전체 블록 수를 미리 알 수 없으므로 파일 단위 진행률 사용
+        total_files = file_count
 
-            # Group texts by page for efficient API calls
-            page_groups = OrderedDict()
-            for idx, item in enumerate(texts):
-                page_key = item.get("page", 0)
-                if page_key not in page_groups:
-                    page_groups[page_key] = []
-                page_groups[page_key].append(idx)
+        for file_idx, file_path in enumerate(self.file_paths):
+            if self._is_cancelled:
+                self.log.emit("번역이 취소되었습니다.")
+                break
 
-            self.log.emit(
-                f"{len(page_groups)}개 페이지로 그룹화 → 예상 API 호출 {len(page_groups)}회"
-            )
-            self.client.reset_api_call_count()
+            file_name = os.path.basename(file_path)
+            base, ext = os.path.splitext(file_path)
+            output_path = f"{base}_translated{ext}"
 
-            translated = 0
-            is_first_page = True
-            for page_key, indices in page_groups.items():
-                if self._is_cancelled:
-                    self.finished_signal.emit(False, "번역이 취소되었습니다.")
-                    return
-
-                if not is_first_page and self.api_delay > 0:
-                    self.log.emit(f"API 딜레이 {self.api_delay}초 대기 중...")
-                    time.sleep(self.api_delay)
-                is_first_page = False
-
-                batch_texts = [texts[i]["text"] for i in indices]
-
-                self.log.emit(
-                    f"번역 중... 페이지 {page_key} "
-                    f"({translated + len(indices)}/{total}, "
-                    f"블록 {len(indices)}개)"
+            try:
+                blocks, success = self._translate_single_file(
+                    file_path, output_path, file_idx, file_count, 0, 0
                 )
+                if success:
+                    succeeded.append(file_name)
+                else:
+                    if self._is_cancelled:
+                        break
+                    failed.append(file_name)
+            except Exception as e:
+                self.log.emit(f"[오류] {file_name}: {e}")
+                failed.append(file_name)
 
-                translated_texts = self.client.translate_batch(
-                    batch_texts, self.source_lang, self.target_lang
-                )
+            # 파일 단위 진행률
+            self.progress.emit(file_idx + 1, total_files)
 
-                for i, trans_text in zip(indices, translated_texts):
-                    texts[i]["text"] = trans_text
+        if self._is_cancelled:
+            self.finished_signal.emit(False, "번역이 취소되었습니다.")
+            return
 
-                translated += len(indices)
-                self.progress.emit(translated, total)
+        # 결과 요약
+        summary_lines = [f"전체 완료: {len(succeeded)}/{file_count}개 파일 성공"]
+        if succeeded:
+            summary_lines.append(f"성공: {', '.join(succeeded)}")
+        if failed:
+            summary_lines.append(f"실패: {', '.join(failed)}")
 
-            self.log.emit(
-                f"번역 완료 (실제 API 호출: {self.client.api_call_count}회)"
-            )
-            self.log.emit("번역 결과 적용 중...")
-            handler.apply_translations(self.file_path, texts, self.output_path)
+        summary = "\n".join(summary_lines)
+        self.log.emit(f"\n{summary}")
 
-            self.finished_signal.emit(True, f"번역 완료!\n저장: {self.output_path}")
-
-        except Exception as e:
-            self.finished_signal.emit(False, f"오류 발생: {e}")
+        if failed:
+            self.finished_signal.emit(False, summary)
+        else:
+            self.finished_signal.emit(True, summary)
 
 
 class MainWindow(QMainWindow):
@@ -198,15 +258,23 @@ class MainWindow(QMainWindow):
         trans_group = QGroupBox("번역 설정")
         trans_layout = QVBoxLayout(trans_group)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("파일:"))
-        self.file_input = QLineEdit()
-        self.file_input.setReadOnly(True)
-        row.addWidget(self.file_input)
-        browse_btn = QPushButton("찾기")
-        browse_btn.clicked.connect(self._browse_file)
-        row.addWidget(browse_btn)
-        trans_layout.addLayout(row)
+        trans_layout.addWidget(QLabel("파일 목록:"))
+        self.file_list = QListWidget()
+        self.file_list.setMaximumHeight(120)
+        self.file_list.setSelectionMode(QListWidget.ExtendedSelection)
+        trans_layout.addWidget(self.file_list)
+
+        btn_row = QHBoxLayout()
+        browse_btn = QPushButton("파일 추가")
+        browse_btn.clicked.connect(self._browse_files)
+        btn_row.addWidget(browse_btn)
+        remove_btn = QPushButton("선택 제거")
+        remove_btn.clicked.connect(self._remove_selected_files)
+        btn_row.addWidget(remove_btn)
+        clear_btn = QPushButton("전체 제거")
+        clear_btn.clicked.connect(self._clear_files)
+        btn_row.addWidget(clear_btn)
+        trans_layout.addLayout(btn_row)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("원본 언어:"))
@@ -336,22 +404,37 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.critical(self, "실패", message)
 
-    def _browse_file(self):
+    def _browse_files(self):
         exts = get_supported_extensions()
         filter_parts = [f"*{e}" for e in exts]
         file_filter = f"지원 파일 ({' '.join(filter_parts)});;모든 파일 (*.*)"
-        path, _ = QFileDialog.getOpenFileName(self, "번역할 파일 선택", "", file_filter)
-        if path:
-            self.file_input.setText(path)
+        paths, _ = QFileDialog.getOpenFileNames(self, "번역할 파일 선택", "", file_filter)
+        if paths:
+            existing = set(self.file_list.item(i).text() for i in range(self.file_list.count()))
+            for path in paths:
+                if path not in existing:
+                    self.file_list.addItem(path)
+
+    def _remove_selected_files(self):
+        for item in reversed(self.file_list.selectedItems()):
+            self.file_list.takeItem(self.file_list.row(item))
+
+    def _clear_files(self):
+        self.file_list.clear()
 
     def _start_translation(self):
         client = self._get_client()
         if not client:
             return
 
-        file_path = self.file_input.text().strip()
-        if not file_path or not os.path.exists(file_path):
-            QMessageBox.warning(self, "경고", "번역할 파일을 선택하세요.")
+        file_paths = [self.file_list.item(i).text() for i in range(self.file_list.count())]
+        if not file_paths:
+            QMessageBox.warning(self, "경고", "번역할 파일을 추가하세요.")
+            return
+
+        missing = [p for p in file_paths if not os.path.exists(p)]
+        if missing:
+            QMessageBox.warning(self, "경고", f"파일을 찾을 수 없습니다:\n{chr(10).join(missing)}")
             return
 
         source = self.source_lang.currentText()
@@ -362,17 +445,13 @@ class MainWindow(QMainWindow):
 
         self._save_current_settings()
 
-        # Generate output path in the same directory as the original file
-        base, ext = os.path.splitext(file_path)
-        output_path = f"{base}_translated{ext}"
-
         self.log_output.clear()
         self.progress_bar.setValue(0)
         self.translate_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
 
         api_delay = self.api_delay_input.value()
-        self.worker = TranslationWorker(client, file_path, source, target, output_path, api_delay)
+        self.worker = TranslationWorker(client, file_paths, source, target, api_delay)
         self.worker.progress.connect(self._on_progress)
         self.worker.log.connect(self._on_log)
         self.worker.finished_signal.connect(self._on_finished)
