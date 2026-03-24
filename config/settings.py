@@ -8,6 +8,7 @@ DEFAULT_CONFIG = {
     "model_name": "gpt-3.5-turbo",
     "source_lang": "한국어",
     "target_lang": "English",
+    "api_delay": 0.0,
 }
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".llm_translator")

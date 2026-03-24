@@ -1,10 +1,12 @@
 import os
+import time
 from collections import OrderedDict
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -47,13 +49,14 @@ class TranslationWorker(QThread):
     log = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)  # success, message
 
-    def __init__(self, client, file_path, source_lang, target_lang, output_path):
+    def __init__(self, client, file_path, source_lang, target_lang, output_path, api_delay=0.0):
         super().__init__()
         self.client = client
         self.file_path = file_path
         self.source_lang = source_lang
         self.target_lang = target_lang
         self.output_path = output_path
+        self.api_delay = api_delay
         self._is_cancelled = False
 
     def cancel(self):
@@ -91,10 +94,16 @@ class TranslationWorker(QThread):
             self.client.reset_api_call_count()
 
             translated = 0
+            is_first_page = True
             for page_key, indices in page_groups.items():
                 if self._is_cancelled:
                     self.finished_signal.emit(False, "번역이 취소되었습니다.")
                     return
+
+                if not is_first_page and self.api_delay > 0:
+                    self.log.emit(f"API 딜레이 {self.api_delay}초 대기 중...")
+                    time.sleep(self.api_delay)
+                is_first_page = False
 
                 batch_texts = [texts[i]["text"] for i in indices]
 
@@ -166,6 +175,17 @@ class MainWindow(QMainWindow):
         self.model_input = QLineEdit()
         self.model_input.setPlaceholderText("예: gpt-3.5-turbo")
         row.addWidget(self.model_input)
+        api_layout.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("API 딜레이(초):"))
+        self.api_delay_input = QDoubleSpinBox()
+        self.api_delay_input.setRange(0.0, 60.0)
+        self.api_delay_input.setSingleStep(0.5)
+        self.api_delay_input.setDecimals(1)
+        self.api_delay_input.setSuffix(" 초")
+        self.api_delay_input.setToolTip("페이지 간 API 호출 사이 대기 시간 (Rate Limit 방지)")
+        row.addWidget(self.api_delay_input)
         api_layout.addLayout(row)
 
         self.test_btn = QPushButton("연결 테스트")
@@ -244,6 +264,8 @@ class MainWindow(QMainWindow):
         self.api_key_input.setText(self.settings.get("api_key", ""))
         self.model_input.setText(self.settings.get("model_name", ""))
 
+        self.api_delay_input.setValue(float(self.settings.get("api_delay", 0.0)))
+
         source = self.settings.get("source_lang", "한국어")
         target = self.settings.get("target_lang", "English")
         idx = self.source_lang.findText(source)
@@ -260,6 +282,7 @@ class MainWindow(QMainWindow):
             "model_name": self.model_input.text().strip(),
             "source_lang": self.source_lang.currentText(),
             "target_lang": self.target_lang.currentText(),
+            "api_delay": self.api_delay_input.value(),
         })
         save_settings(self.settings)
 
@@ -348,7 +371,8 @@ class MainWindow(QMainWindow):
         self.translate_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
 
-        self.worker = TranslationWorker(client, file_path, source, target, output_path)
+        api_delay = self.api_delay_input.value()
+        self.worker = TranslationWorker(client, file_path, source, target, output_path, api_delay)
         self.worker.progress.connect(self._on_progress)
         self.worker.log.connect(self._on_log)
         self.worker.finished_signal.connect(self._on_finished)
