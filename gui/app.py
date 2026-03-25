@@ -277,6 +277,17 @@ class MainWindow(QMainWindow):
         row.addWidget(self.pages_per_batch_input)
         api_layout.addLayout(row)
 
+        row = QHBoxLayout()
+        row.addWidget(QLabel("요청 타임아웃:"))
+        self.request_timeout_input = QSpinBox()
+        self.request_timeout_input.setRange(30, 600)
+        self.request_timeout_input.setValue(300)
+        self.request_timeout_input.setSingleStep(30)
+        self.request_timeout_input.setSuffix(" 초")
+        self.request_timeout_input.setToolTip("API 요청 최대 대기 시간 (큰 파일일수록 높게 설정)")
+        row.addWidget(self.request_timeout_input)
+        api_layout.addLayout(row)
+
         self.test_btn = QPushButton("연결 테스트")
         self.test_btn.clicked.connect(self._test_connection)
         api_layout.addWidget(self.test_btn, alignment=Qt.AlignRight)
@@ -365,6 +376,7 @@ class MainWindow(QMainWindow):
 
         self.api_delay_input.setValue(float(self.settings.get("api_delay", 0.0)))
         self.pages_per_batch_input.setValue(int(self.settings.get("pages_per_batch", 2)))
+        self.request_timeout_input.setValue(int(self.settings.get("request_timeout", 300)))
 
         source = self.settings.get("source_lang", "한국어")
         target = self.settings.get("target_lang", "English")
@@ -384,6 +396,7 @@ class MainWindow(QMainWindow):
             "target_lang": self.target_lang.currentData(),
             "api_delay": self.api_delay_input.value(),
             "pages_per_batch": self.pages_per_batch_input.value(),
+            "request_timeout": self.request_timeout_input.value(),
         })
         save_settings(self.settings)
 
@@ -402,7 +415,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "경고", "모델명을 입력하세요.")
             return None
 
-        return LLMClient(url, key, model)
+        timeout = self.request_timeout_input.value()
+        return LLMClient(url, key, model, request_timeout=timeout)
 
     def _test_connection(self):
         client = self._get_client()

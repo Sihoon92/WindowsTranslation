@@ -12,7 +12,7 @@ class LLMClient:
     # JSON 배치 번역 실패 시 재시도 횟수
     BATCH_PARSE_RETRIES = 2
 
-    def __init__(self, api_url: str, api_key: str, model_name: str):
+    def __init__(self, api_url: str, api_key: str, model_name: str, request_timeout: int = 300):
         base_url = api_url.rstrip("/")
         if not base_url.endswith("/v1"):
             base_url = f"{base_url}/v1"
@@ -22,7 +22,7 @@ class LLMClient:
             api_key=api_key,
             model=model_name,
             temperature=0.3,
-            request_timeout=60,
+            request_timeout=request_timeout,
             max_retries=3,
         )
         self._api_call_count = 0
