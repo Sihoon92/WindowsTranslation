@@ -28,22 +28,23 @@ from handlers import get_handler, get_supported_extensions
 from translator.llm_client import LLMClient
 
 
+# (표시명, API에 전달할 언어명) 쌍
 LANGUAGES = [
-    "한국어",
-    "English",
-    "日本語",
-    "中文(简体)",
-    "中文(繁體)",
-    "Deutsch",
-    "Français",
-    "Español",
-    "Português",
-    "Русский",
-    "العربية",
-    "Tiếng Việt",
-    "ภาษาไทย",
-    "Bahasa Indonesia",
-    "Magyar",
+    ("한국어", "한국어"),
+    ("영어", "English"),
+    ("일본어", "日本語"),
+    ("중국어(간체)", "中文(简体)"),
+    ("중국어(번체)", "中文(繁體)"),
+    ("독일어", "Deutsch"),
+    ("프랑스어", "Français"),
+    ("스페인어", "Español"),
+    ("포르투갈어", "Português"),
+    ("러시아어", "Русский"),
+    ("아랍어", "العربية"),
+    ("베트남어", "Tiếng Việt"),
+    ("태국어", "ภาษาไทย"),
+    ("인도네시아어", "Bahasa Indonesia"),
+    ("헝가리어", "Magyar"),
 ]
 
 
@@ -307,11 +308,13 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.addWidget(QLabel("원본 언어:"))
         self.source_lang = QComboBox()
-        self.source_lang.addItems(LANGUAGES)
+        for display, value in LANGUAGES:
+            self.source_lang.addItem(display, value)
         row.addWidget(self.source_lang)
         row.addWidget(QLabel("번역 언어:"))
         self.target_lang = QComboBox()
-        self.target_lang.addItems(LANGUAGES)
+        for display, value in LANGUAGES:
+            self.target_lang.addItem(display, value)
         row.addWidget(self.target_lang)
         trans_layout.addLayout(row)
 
@@ -365,10 +368,10 @@ class MainWindow(QMainWindow):
 
         source = self.settings.get("source_lang", "한국어")
         target = self.settings.get("target_lang", "English")
-        idx = self.source_lang.findText(source)
+        idx = self.source_lang.findData(source)
         if idx >= 0:
             self.source_lang.setCurrentIndex(idx)
-        idx = self.target_lang.findText(target)
+        idx = self.target_lang.findData(target)
         if idx >= 0:
             self.target_lang.setCurrentIndex(idx)
 
@@ -377,8 +380,8 @@ class MainWindow(QMainWindow):
             "api_url": self.api_url_input.text().strip(),
             "api_key": self.api_key_input.text().strip(),
             "model_name": self.model_input.text().strip(),
-            "source_lang": self.source_lang.currentText(),
-            "target_lang": self.target_lang.currentText(),
+            "source_lang": self.source_lang.currentData(),
+            "target_lang": self.target_lang.currentData(),
             "api_delay": self.api_delay_input.value(),
             "pages_per_batch": self.pages_per_batch_input.value(),
         })
@@ -467,8 +470,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "경고", f"파일을 찾을 수 없습니다:\n{chr(10).join(missing)}")
             return
 
-        source = self.source_lang.currentText()
-        target = self.target_lang.currentText()
+        source = self.source_lang.currentData()
+        target = self.target_lang.currentData()
         if source == target:
             QMessageBox.warning(self, "경고", "원본 언어와 번역 언어가 같습니다.")
             return
