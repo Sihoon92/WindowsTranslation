@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -51,13 +52,14 @@ class TranslationWorker(QThread):
     log = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)  # success, message
 
-    def __init__(self, client, file_paths, source_lang, target_lang, api_delay=0.0):
+    def __init__(self, client, file_paths, source_lang, target_lang, api_delay=0.0, pages_per_batch=2):
         super().__init__()
         self.client = client
         self.file_paths = file_paths
         self.source_lang = source_lang
         self.target_lang = target_lang
         self.api_delay = api_delay
+        self.pages_per_batch = max(1, pages_per_batch)
         self._is_cancelled = False
 
     def cancel(self):
@@ -94,26 +96,41 @@ class TranslationWorker(QThread):
                 page_groups[page_key] = []
             page_groups[page_key].append(idx)
 
+        # Merge consecutive page groups into batches of `pages_per_batch`
+        ppb = self.pages_per_batch
+        page_keys = list(page_groups.keys())
+        batches = []  # list of (label, indices)
+        for i in range(0, len(page_keys), ppb):
+            chunk_keys = page_keys[i : i + ppb]
+            merged_indices = []
+            for pk in chunk_keys:
+                merged_indices.extend(page_groups[pk])
+            if len(chunk_keys) == 1:
+                label = f"페이지 {chunk_keys[0]}"
+            else:
+                label = f"페이지 {chunk_keys[0]}-{chunk_keys[-1]}"
+            batches.append((label, merged_indices))
+
         self.log.emit(
-            f"{len(page_groups)}개 페이지로 그룹화 → 예상 API 호출 {len(page_groups)}회"
+            f"{len(page_groups)}개 페이지 → {ppb}페이지씩 묶어 {len(batches)}회 API 호출 예정"
         )
         self.client.reset_api_call_count()
 
         translated = 0
-        is_first_page = True
-        for page_key, indices in page_groups.items():
+        is_first_batch = True
+        for batch_label, indices in batches:
             if self._is_cancelled:
                 return translated, False
 
-            if not is_first_page and self.api_delay > 0:
+            if not is_first_batch and self.api_delay > 0:
                 self.log.emit(f"API 딜레이 {self.api_delay}초 대기 중...")
                 time.sleep(self.api_delay)
-            is_first_page = False
+            is_first_batch = False
 
             batch_texts = [texts[i]["text"] for i in indices]
 
             self.log.emit(
-                f"번역 중... 페이지 {page_key} "
+                f"번역 중... {batch_label} "
                 f"({translated + len(indices)}/{file_total}, "
                 f"블록 {len(indices)}개)"
             )
@@ -249,6 +266,16 @@ class MainWindow(QMainWindow):
         row.addWidget(self.api_delay_input)
         api_layout.addLayout(row)
 
+        row = QHBoxLayout()
+        row.addWidget(QLabel("페이지 묶음:"))
+        self.pages_per_batch_input = QSpinBox()
+        self.pages_per_batch_input.setRange(1, 10)
+        self.pages_per_batch_input.setValue(2)
+        self.pages_per_batch_input.setSuffix(" 페이지/호출")
+        self.pages_per_batch_input.setToolTip("한 번의 API 호출에 몇 페이지를 묶어서 보낼지 설정 (Rate Limit 방지)")
+        row.addWidget(self.pages_per_batch_input)
+        api_layout.addLayout(row)
+
         self.test_btn = QPushButton("연결 테스트")
         self.test_btn.clicked.connect(self._test_connection)
         api_layout.addWidget(self.test_btn, alignment=Qt.AlignRight)
@@ -334,6 +361,7 @@ class MainWindow(QMainWindow):
         self.model_input.setText(self.settings.get("model_name", ""))
 
         self.api_delay_input.setValue(float(self.settings.get("api_delay", 0.0)))
+        self.pages_per_batch_input.setValue(int(self.settings.get("pages_per_batch", 2)))
 
         source = self.settings.get("source_lang", "한국어")
         target = self.settings.get("target_lang", "English")
@@ -352,6 +380,7 @@ class MainWindow(QMainWindow):
             "source_lang": self.source_lang.currentText(),
             "target_lang": self.target_lang.currentText(),
             "api_delay": self.api_delay_input.value(),
+            "pages_per_batch": self.pages_per_batch_input.value(),
         })
         save_settings(self.settings)
 
@@ -452,7 +481,8 @@ class MainWindow(QMainWindow):
         self.cancel_btn.setEnabled(True)
 
         api_delay = self.api_delay_input.value()
-        self.worker = TranslationWorker(client, file_paths, source, target, api_delay)
+        pages_per_batch = self.pages_per_batch_input.value()
+        self.worker = TranslationWorker(client, file_paths, source, target, api_delay, pages_per_batch)
         self.worker.progress.connect(self._on_progress)
         self.worker.log.connect(self._on_log)
         self.worker.finished_signal.connect(self._on_finished)
