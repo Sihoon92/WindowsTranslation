@@ -129,6 +129,17 @@ class LLMClient:
                 "[번역] Structured output 배열 길이 불일치: 기대 %d, 실제 %d",
                 len(items), len(result.translations),
             )
+            # 디버깅: 입력 vs 출력 비교
+            logger.warning("─── 입력 (%d건) vs 출력 (%d건) 비교 ───",
+                           len(items), len(result.translations))
+            max_len = max(len(items), len(result.translations))
+            for i in range(max_len):
+                src = items[i][:60].replace("\n", "\\n") if i < len(items) else "<<없음>>"
+                tgt = result.translations[i][:60].replace("\n", "\\n") if i < len(result.translations) else "<<없음>>"
+                marker = " " if i < len(items) and i < len(result.translations) else "*"
+                logger.warning("[%s] #%02d  입력: %s", marker, i, src)
+                logger.warning("[%s]       출력: %s", marker, tgt)
+            logger.warning("─── 비교 끝 ───")
             return None
 
         except Exception as e:
