@@ -1,0 +1,7 @@
+[
+  {"source": "화성", "target": "formation"},
+  {"source": "합제", "target": "electrodecomposite"},
+  {"source": "학습률", "target": "Rate of Learning"},
+  {"source": "활물질 탈리", "target": "shedding of activate materials from plates"},
+  {"source": "활물질", "target": "Active Material"}
+]
