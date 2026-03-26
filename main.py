@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 
@@ -13,6 +14,12 @@ from gui.app import MainWindow
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     window = MainWindow()

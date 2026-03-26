@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 
 from pydantic import BaseModel
 from langchain_openai import ChatOpenAI
@@ -36,6 +37,12 @@ class LLMClient:
         self._structured_output_supported: bool | None = None
         self._glossary_prompt = glossary_prompt
 
+        if glossary_prompt:
+            term_count = glossary_prompt.count("\n| ") - 1  # 헤더 행 제외
+            logger.info("[용어집] %d개 용어 적용 중", term_count)
+        else:
+            logger.info("[용어집] 없음")
+
     @property
     def api_call_count(self) -> int:
         return self._api_call_count
@@ -46,7 +53,11 @@ class LLMClient:
     def _invoke(self, messages: list, temperature: float = 0.3) -> str:
         self.llm.temperature = temperature
         self._api_call_count += 1
+        logger.info("[API] 요청 전송 중... (호출 #%d)", self._api_call_count)
+        t0 = time.time()
         response = self.llm.invoke(messages)
+        elapsed = time.time() - t0
+        logger.info("[API] 응답 수신 완료 (%.1f초)", elapsed)
         return response.content.strip()
 
     def test_connection(self) -> tuple[bool, str]:
@@ -63,6 +74,7 @@ class LLMClient:
         if not text or not text.strip():
             return text
 
+        logger.info("[번역] 단건 번역 요청: %s", text[:50].replace("\n", " "))
         messages = [
             SystemMessage(content=(
                 f"You are a professional translator. "
@@ -100,17 +112,21 @@ class LLMClient:
         ]
 
         try:
+            logger.info("[API] Structured output 방식 요청 중... (%d건)", len(items))
             structured_llm = self.llm.with_structured_output(TranslationResult)
             self._api_call_count += 1
+            t0 = time.time()
             result: TranslationResult = structured_llm.invoke(messages)
+            elapsed = time.time() - t0
+            logger.info("[API] Structured output 응답 수신 (%.1f초)", elapsed)
 
             if len(result.translations) == len(items):
                 self._structured_output_supported = True
-                logger.info("Structured output 배치 번역 성공 (%d건)", len(items))
+                logger.info("[번역] Structured output 성공 (%d건)", len(items))
                 return result.translations
 
             logger.warning(
-                "Structured output 배열 길이 불일치: 기대 %d, 실제 %d",
+                "[번역] Structured output 배열 길이 불일치: 기대 %d, 실제 %d",
                 len(items), len(result.translations),
             )
             return None
@@ -119,10 +135,10 @@ class LLMClient:
             if self._structured_output_supported is None:
                 self._structured_output_supported = False
                 logger.info(
-                    "Structured output 미지원 → 프롬프트 방식으로 전환: %s", e
+                    "[번역] Structured output 미지원 → 프롬프트 방식으로 전환: %s", e
                 )
             else:
-                logger.warning("Structured output 실패: %s", e)
+                logger.warning("[번역] Structured output 실패: %s", e)
             return None
 
     # ── Prompt 기반 JSON 파싱 (fallback) ────────────────────────
@@ -174,6 +190,7 @@ class LLMClient:
             f"{self._glossary_prompt}"
         )
 
+        logger.info("[API] 프롬프트 JSON 방식 요청 중... (%d건)", len(items))
         for attempt in range(1 + self.BATCH_PARSE_RETRIES):
             messages = [
                 SystemMessage(content=system_prompt),
@@ -187,7 +204,7 @@ class LLMClient:
                     f"Please try again. Return ONLY a JSON array."
                 )))
                 logger.warning(
-                    "JSON 배치 번역 재시도 %d/%d (파싱 실패)",
+                    "[번역] JSON 파싱 재시도 %d/%d",
                     attempt, self.BATCH_PARSE_RETRIES,
                 )
 
@@ -195,6 +212,7 @@ class LLMClient:
             parsed = self._try_parse_json_array(response, len(items))
 
             if parsed is not None:
+                logger.info("[번역] 프롬프트 JSON 방식 성공 (%d건)", len(items))
                 return parsed
 
         return None
@@ -210,6 +228,8 @@ class LLMClient:
         non_empty = [(i, t) for i, t in enumerate(texts) if t and t.strip()]
         if not non_empty:
             return list(texts)
+
+        logger.info("[번역] 배치 시작: %d건 (전체 %d건 중 비어있지 않은 항목)", len(non_empty), len(texts))
 
         # 텍스트 1개면 단건 호출
         if len(non_empty) == 1:

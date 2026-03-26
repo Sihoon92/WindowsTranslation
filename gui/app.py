@@ -1,6 +1,9 @@
+import logging
 import os
 import time
 from collections import OrderedDict
+
+logger = logging.getLogger(__name__)
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -73,6 +76,7 @@ class TranslationWorker(QThread):
     def _translate_single_file(self, file_path, output_path, file_idx, file_count, completed_files_blocks, total_blocks):
         """Translate a single file. Returns number of text blocks processed."""
         file_name = os.path.basename(file_path)
+        logger.info("=== 파일 %d/%d: %s ===", file_idx + 1, file_count, file_name)
         self.log.emit(f"\n{'='*40}")
         self.log.emit(f"[{file_idx + 1}/{file_count}] {file_name}")
         self.log.emit(f"{'='*40}")
@@ -80,17 +84,23 @@ class TranslationWorker(QThread):
         handler = get_handler(file_path)
         if handler is None:
             ext = os.path.splitext(file_path)[1]
+            logger.info("[건너뜀] 지원하지 않는 파일 형식: %s", ext)
             self.log.emit(f"[건너뜀] 지원하지 않는 파일 형식: {ext}")
             return 0, False
 
+        logger.info("[추출] 텍스트 추출 시작")
         self.log.emit("텍스트 추출 중...")
+        t0 = time.time()
         texts = handler.extract_texts(file_path)
+        extract_elapsed = time.time() - t0
 
         if not texts:
+            logger.info("[추출] 번역할 텍스트 없음")
             self.log.emit("[건너뜀] 번역할 텍스트가 없습니다.")
             return 0, True
 
         file_total = len(texts)
+        logger.info("[추출] %d개 블록 추출 완료 (%.1f초)", file_total, extract_elapsed)
         self.log.emit(f"총 {file_total}개 텍스트 블록 추출 완료")
 
         # Group texts by page
@@ -116,6 +126,8 @@ class TranslationWorker(QThread):
                 label = f"페이지 {chunk_keys[0]}-{chunk_keys[-1]}"
             batches.append((label, merged_indices))
 
+        logger.info("[배치] %d개 페이지 → %d페이지씩 묶어 %d회 API 호출 예정",
+                    len(page_groups), ppb, len(batches))
         self.log.emit(
             f"{len(page_groups)}개 페이지 → {ppb}페이지씩 묶어 {len(batches)}회 API 호출 예정"
         )
@@ -123,26 +135,34 @@ class TranslationWorker(QThread):
 
         translated = 0
         is_first_batch = True
-        for batch_label, indices in batches:
+        for batch_idx, (batch_label, indices) in enumerate(batches, 1):
             if self._is_cancelled:
                 return translated, False
 
             if not is_first_batch and self.api_delay > 0:
+                logger.info("[대기] API 딜레이 %.1f초", self.api_delay)
                 self.log.emit(f"API 딜레이 {self.api_delay}초 대기 중...")
                 time.sleep(self.api_delay)
             is_first_batch = False
 
             batch_texts = [texts[i]["text"] for i in indices]
 
+            logger.info("[번역] 배치 %d/%d (%s, 블록 %d개)",
+                        batch_idx, len(batches), batch_label, len(indices))
             self.log.emit(
                 f"번역 중... {batch_label} "
                 f"({translated + len(indices)}/{file_total}, "
                 f"블록 {len(indices)}개)"
             )
 
+            t0 = time.time()
             translated_texts = self.client.translate_batch(
                 batch_texts, self.source_lang, self.target_lang
             )
+            batch_elapsed = time.time() - t0
+            logger.info("[번역] 배치 %d/%d 완료 (%.1f초, %d/%d)",
+                        batch_idx, len(batches), batch_elapsed,
+                        translated + len(indices), file_total)
 
             for i, trans_text in zip(indices, translated_texts):
                 texts[i]["text"] = trans_text
@@ -150,11 +170,14 @@ class TranslationWorker(QThread):
             translated += len(indices)
             self.progress.emit(completed_files_blocks + translated, total_blocks)
 
+        logger.info("[완료] 번역 완료 (실제 API 호출: %d회)", self.client.api_call_count)
         self.log.emit(
             f"번역 완료 (실제 API 호출: {self.client.api_call_count}회)"
         )
+        logger.info("[저장] 번역 결과 적용 중...")
         self.log.emit("번역 결과 적용 중...")
         handler.apply_translations(file_path, texts, output_path)
+        logger.info("[저장] %s", output_path)
         self.log.emit(f"저장: {output_path}")
 
         return translated, True
