@@ -228,7 +228,7 @@ class MainWindow(QMainWindow):
 
     def _init_ui(self):
         self.setWindowTitle("LLM 파일 번역기")
-        self.setMinimumSize(600, 700)
+        self.setMinimumSize(600, 900)
 
         central = QWidget()
         self.setCentralWidget(central)
