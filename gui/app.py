@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -18,12 +19,15 @@ from PyQt5.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from config.settings import load_settings, save_settings
+from config.glossary import load_glossary, save_glossary, glossary_to_prompt
 from handlers import get_handler, get_supported_extensions
 from translator.llm_client import LLMClient
 
@@ -331,6 +335,27 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(trans_group)
 
+        # --- Glossary ---
+        glossary_group = QGroupBox("도메인 용어집")
+        glossary_layout = QVBoxLayout(glossary_group)
+
+        self.glossary_table = QTableWidget(0, 2)
+        self.glossary_table.setHorizontalHeaderLabels(["원문 용어", "번역 용어"])
+        self.glossary_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.glossary_table.setMaximumHeight(150)
+        glossary_layout.addWidget(self.glossary_table)
+
+        glossary_btn_row = QHBoxLayout()
+        add_term_btn = QPushButton("용어 추가")
+        add_term_btn.clicked.connect(self._add_glossary_row)
+        glossary_btn_row.addWidget(add_term_btn)
+        remove_term_btn = QPushButton("선택 삭제")
+        remove_term_btn.clicked.connect(self._remove_glossary_row)
+        glossary_btn_row.addWidget(remove_term_btn)
+        glossary_layout.addLayout(glossary_btn_row)
+
+        layout.addWidget(glossary_group)
+
         # --- Action ---
         btn_layout = QHBoxLayout()
         self.translate_btn = QPushButton("번역 시작")
@@ -387,6 +412,32 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.target_lang.setCurrentIndex(idx)
 
+        # 용어집 로드
+        for entry in load_glossary():
+            self._add_glossary_row(entry.get("source", ""), entry.get("target", ""))
+
+    def _add_glossary_row(self, source="", target=""):
+        row = self.glossary_table.rowCount()
+        self.glossary_table.insertRow(row)
+        self.glossary_table.setItem(row, 0, QTableWidgetItem(source))
+        self.glossary_table.setItem(row, 1, QTableWidgetItem(target))
+
+    def _remove_glossary_row(self):
+        rows = sorted(set(idx.row() for idx in self.glossary_table.selectedIndexes()), reverse=True)
+        for row in rows:
+            self.glossary_table.removeRow(row)
+
+    def _get_glossary_entries(self) -> list[dict]:
+        entries = []
+        for row in range(self.glossary_table.rowCount()):
+            src_item = self.glossary_table.item(row, 0)
+            tgt_item = self.glossary_table.item(row, 1)
+            src = src_item.text().strip() if src_item else ""
+            tgt = tgt_item.text().strip() if tgt_item else ""
+            if src and tgt:
+                entries.append({"source": src, "target": tgt})
+        return entries
+
     def _save_current_settings(self):
         self.settings.update({
             "api_url": self.api_url_input.text().strip(),
@@ -399,6 +450,7 @@ class MainWindow(QMainWindow):
             "request_timeout": self.request_timeout_input.value(),
         })
         save_settings(self.settings)
+        save_glossary(self._get_glossary_entries())
 
     def _get_client(self) -> LLMClient | None:
         url = self.api_url_input.text().strip()
@@ -416,7 +468,8 @@ class MainWindow(QMainWindow):
             return None
 
         timeout = self.request_timeout_input.value()
-        return LLMClient(url, key, model, request_timeout=timeout)
+        gp = glossary_to_prompt(self._get_glossary_entries())
+        return LLMClient(url, key, model, request_timeout=timeout, glossary_prompt=gp)
 
     def _test_connection(self):
         client = self._get_client()

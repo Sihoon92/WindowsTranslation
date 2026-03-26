@@ -18,7 +18,8 @@ class LLMClient:
     # 프롬프트 기반 JSON 배치 번역 실패 시 재시도 횟수
     BATCH_PARSE_RETRIES = 2
 
-    def __init__(self, api_url: str, api_key: str, model_name: str, request_timeout: int = 300):
+    def __init__(self, api_url: str, api_key: str, model_name: str, request_timeout: int = 300,
+                 glossary_prompt: str = ""):
         base_url = api_url.rstrip("/")
         if not base_url.endswith("/v1"):
             base_url = f"{base_url}/v1"
@@ -33,6 +34,7 @@ class LLMClient:
         )
         self._api_call_count = 0
         self._structured_output_supported: bool | None = None
+        self._glossary_prompt = glossary_prompt
 
     @property
     def api_call_count(self) -> int:
@@ -68,6 +70,7 @@ class LLMClient:
                 f"Return ONLY the translated text without any explanation, "
                 f"prefix, or additional formatting. "
                 f"Preserve numbers, special characters, and line breaks as-is."
+                f"{self._glossary_prompt}"
             )),
             HumanMessage(content=text),
         ]
@@ -88,6 +91,7 @@ class LLMClient:
             f"The input is a JSON array of {len(items)} texts. "
             f"Return exactly {len(items)} translated texts in the same order. "
             f"Preserve numbers, special characters, and line breaks."
+            f"{self._glossary_prompt}"
         )
         json_input = json.dumps(items, ensure_ascii=False)
         messages = [
@@ -167,6 +171,7 @@ class LLMClient:
             f"The output array MUST have exactly {len(items)} elements. "
             f"Preserve numbers, special characters, and line breaks. "
             f"Do not add any explanation or formatting outside the JSON array."
+            f"{self._glossary_prompt}"
         )
 
         for attempt in range(1 + self.BATCH_PARSE_RETRIES):
